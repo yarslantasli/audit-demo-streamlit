@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+from pypdf import PdfReader
+import re
 
 st.set_page_config(page_title="Audit Automation Demo", layout="wide")
 
@@ -381,4 +383,167 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         use_container_width=True,
     )
 
+    st.success("Demo workflow completed.")
+        # -----------------------------
+    # Supporting Document Upload & Comparison
+    # -----------------------------
+
+    st.header("10. Supporting Document Upload & GL Comparison")
+
+    st.write(
+        "Upload fake invoice PDFs for the selected revenue samples. "
+        "The system will extract invoice number, customer, date and net amount, then compare them to the GL sample."
+    )
+
+    uploaded_supporting_docs = st.file_uploader(
+        "Upload Supporting Invoice PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="supporting_docs",
+    )
+
+    def extract_pdf_text(pdf_file):
+        reader = PdfReader(pdf_file)
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        return text
+
+    def extract_invoice_fields(text):
+        invoice_no = None
+        customer = None
+        invoice_date = None
+        net_amount = None
+
+        invoice_match = re.search(r"(INV-\d{2}-\d{5})", text)
+        if invoice_match:
+            invoice_no = invoice_match.group(1)
+
+        customer_match = re.search(r"Customer:\s*(Customer\s+[A-Z])", text)
+        if customer_match:
+            customer = customer_match.group(1)
+
+        date_match = re.search(r"Invoice Date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", text)
+        if date_match:
+            invoice_date = date_match.group(1)
+
+        amount_match = re.search(r"Net Amount:\s*£?([0-9,]+(?:\.[0-9]{2})?)", text)
+        if amount_match:
+            net_amount = float(amount_match.group(1).replace(",", ""))
+
+        return {
+            "Extracted_Invoice_No": invoice_no,
+            "Extracted_Customer": customer,
+            "Extracted_Date": invoice_date,
+            "Extracted_Net_Amount": net_amount,
+        }
+
+    if uploaded_supporting_docs:
+        extraction_results = []
+
+        for pdf_file in uploaded_supporting_docs:
+            pdf_text = extract_pdf_text(pdf_file)
+            extracted = extract_invoice_fields(pdf_text)
+            extracted["Uploaded_File"] = pdf_file.name
+            extraction_results.append(extracted)
+
+        extracted_df = pd.DataFrame(extraction_results)
+
+        st.subheader("Extracted Supporting Document Data")
+        st.dataframe(extracted_df, use_container_width=True)
+
+        comparison_df = sample_df.copy()
+
+        comparison_df["Invoice_No_Clean"] = comparison_df["Invoice_No"].astype(str).str.strip()
+        extracted_df["Extracted_Invoice_No_Clean"] = extracted_df["Extracted_Invoice_No"].astype(str).str.strip()
+
+        comparison_df = comparison_df.merge(
+            extracted_df,
+            left_on="Invoice_No_Clean",
+            right_on="Extracted_Invoice_No_Clean",
+            how="left",
+        )
+
+        comparison_df["GL_Date"] = pd.to_datetime(comparison_df["Date"]).dt.date.astype(str)
+        comparison_df["GL_Amount"] = comparison_df["Credit"].astype(float)
+
+        comparison_df["Invoice_Number_Match"] = comparison_df["Invoice_No"] == comparison_df["Extracted_Invoice_No"]
+        comparison_df["Customer_Match"] = comparison_df["Customer"] == comparison_df["Extracted_Customer"]
+        comparison_df["Date_Match"] = comparison_df["GL_Date"] == comparison_df["Extracted_Date"]
+        comparison_df["Amount_Match"] = comparison_df["GL_Amount"].round(2) == comparison_df["Extracted_Net_Amount"].round(2)
+
+        comparison_df["Overall_Result"] = comparison_df.apply(
+            lambda row: "No exception noted"
+            if row["Invoice_Number_Match"]
+            and row["Customer_Match"]
+            and row["Date_Match"]
+            and row["Amount_Match"]
+            else "Exception / review required",
+            axis=1,
+        )
+
+        display_cols = [
+            "Journal_ID",
+            "Invoice_No",
+            "Customer",
+            "GL_Date",
+            "GL_Amount",
+            "Extracted_Invoice_No",
+            "Extracted_Customer",
+            "Extracted_Date",
+            "Extracted_Net_Amount",
+            "Invoice_Number_Match",
+            "Customer_Match",
+            "Date_Match",
+            "Amount_Match",
+            "Overall_Result",
+            "Uploaded_File",
+        ]
+
+        st.subheader("GL vs Supporting Document Comparison")
+        st.dataframe(
+            comparison_df[display_cols].style.format({
+                "GL_Amount": "£{:,.0f}",
+                "Extracted_Net_Amount": "£{:,.0f}",
+            }),
+            use_container_width=True,
+        )
+
+        st.subheader("Draft Workpaper Documentation")
+
+        for _, row in comparison_df.iterrows():
+            st.markdown(f"### Sample: {row['Journal_ID']} / {row['Invoice_No']}")
+
+            if row["Overall_Result"] == "No exception noted":
+                note = f"""
+We inspected invoice {row['Extracted_Invoice_No']} for {row['Extracted_Customer']}, dated {row['Extracted_Date']}, with a net amount of £{row['Extracted_Net_Amount']:,.0f}. 
+The invoice number, customer, date and amount agree to the selected GL revenue transaction. 
+No exception noted.
+"""
+            else:
+                issues = []
+
+                if not row["Invoice_Number_Match"]:
+                    issues.append("invoice number does not agree")
+                if not row["Customer_Match"]:
+                    issues.append("customer name does not agree")
+                if not row["Date_Match"]:
+                    issues.append("invoice date does not agree")
+                if not row["Amount_Match"]:
+                    issues.append("invoice amount does not agree")
+
+                issue_text = ", ".join(issues)
+
+                note = f"""
+We inspected the supporting document uploaded for selected revenue transaction {row['Journal_ID']} / {row['Invoice_No']}. 
+The system identified the following issue(s): {issue_text}. 
+Auditor review is required to determine whether this represents a genuine exception or requires further client follow-up.
+"""
+
+            st.info(note)
+
+    else:
+        st.warning("No supporting invoice PDFs uploaded yet.")
     st.success("Demo workflow completed.")
