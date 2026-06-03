@@ -476,8 +476,14 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         comparison_df["Invoice_Number_Match"] = comparison_df["Invoice_No"] == comparison_df["Extracted_Invoice_No"]
         comparison_df["Customer_Match"] = comparison_df["Customer"] == comparison_df["Extracted_Customer"]
         comparison_df["Date_Match"] = comparison_df["GL_Date"] == comparison_df["Extracted_Date"]
-        comparison_df["Amount_Match"] = comparison_df["GL_Amount"].round(2) == comparison_df["Extracted_Net_Amount"].round(2)
+        comparison_df["Extracted_Net_Amount"] = pd.to_numeric(
+    comparison_df["Extracted_Net_Amount"], errors="coerce"
+)
 
+comparison_df["Amount_Match"] = (
+    comparison_df["GL_Amount"].round(2)
+    == comparison_df["Extracted_Net_Amount"].round(2)
+)
         comparison_df["Overall_Result"] = comparison_df.apply(
             lambda row: "No exception noted"
             if row["Invoice_Number_Match"]
