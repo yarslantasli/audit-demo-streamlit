@@ -414,85 +414,46 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
             if page_text:
                 text += page_text + "\n"
         return text
+def extract_invoice_fields(text):
+    invoice_no = None
+    customer = None
+    invoice_date = None
+    net_amount = None
 
-    def extract_invoice_fields(text):
-        invoice_no = None
-        customer = None
-        invoice_date = None
-        net_amount = None
+    # Invoice number
+    invoice_match = re.search(r"(INV-\d{2}-\d{4,5})", text)
+    if invoice_match:
+        invoice_no = invoice_match.group(1)
 
-        invoice_match = re.search(r"(INV-\d{2}-\d{5})", text)
-        if invoice_match:
-            invoice_no = invoice_match.group(1)
+    # Customer - flexible pattern
+    customer_match = re.search(r"Customer\s*:?\s*(Customer\s+[A-Z])", text, re.IGNORECASE)
+    if customer_match:
+        customer = customer_match.group(1)
 
-        customer_match = re.search(r"Customer:\s*(Customer\s+[A-Z])", text)
-        if customer_match:
-            customer = customer_match.group(1)
+    # Date - flexible pattern
+    date_match = re.search(
+        r"(Invoice Date|Date)\s*:?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if date_match:
+        invoice_date = date_match.group(2)
 
-        date_match = re.search(r"Invoice Date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", text)
-        if date_match:
-            invoice_date = date_match.group(1)
+    # Net amount - flexible pattern
+    amount_match = re.search(
+        r"(Net Amount|Amount|Total)\s*:?\s*£?\s*([0-9,]+(?:\.[0-9]{2})?)",
+        text,
+        re.IGNORECASE,
+    )
+    if amount_match:
+        net_amount = float(amount_match.group(2).replace(",", ""))
 
-        amount_match = re.search(r"Net Amount:\s*£?([0-9,]+(?:\.[0-9]{2})?)", text)
-        if amount_match:
-            net_amount = float(amount_match.group(1).replace(",", ""))
-
-        return {
-            "Extracted_Invoice_No": invoice_no,
-            "Extracted_Customer": customer,
-            "Extracted_Date": invoice_date,
-            "Extracted_Net_Amount": net_amount,
-        }
-
-    if uploaded_supporting_docs:
-        extraction_results = []
-
-        for pdf_file in uploaded_supporting_docs:
-            pdf_text = extract_pdf_text(pdf_file)
-            extracted = extract_invoice_fields(pdf_text)
-            extracted["Uploaded_File"] = pdf_file.name
-            extraction_results.append(extracted)
-
-        extracted_df = pd.DataFrame(extraction_results)
-
-        st.subheader("Extracted Supporting Document Data")
-        st.dataframe(extracted_df, use_container_width=True)
-
-        comparison_df = sample_df.copy()
-
-        comparison_df["Invoice_No_Clean"] = comparison_df["Invoice_No"].astype(str).str.strip()
-        extracted_df["Extracted_Invoice_No_Clean"] = extracted_df["Extracted_Invoice_No"].astype(str).str.strip()
-
-        comparison_df = comparison_df.merge(
-            extracted_df,
-            left_on="Invoice_No_Clean",
-            right_on="Extracted_Invoice_No_Clean",
-            how="left",
-        )
-
-        comparison_df["GL_Date"] = pd.to_datetime(comparison_df["Date"]).dt.date.astype(str)
-        comparison_df["GL_Amount"] = comparison_df["Credit"].astype(float)
-
-        comparison_df["Invoice_Number_Match"] = comparison_df["Invoice_No"] == comparison_df["Extracted_Invoice_No"]
-        comparison_df["Customer_Match"] = comparison_df["Customer"] == comparison_df["Extracted_Customer"]
-        comparison_df["Date_Match"] = comparison_df["GL_Date"] == comparison_df["Extracted_Date"]
-        comparison_df["Extracted_Net_Amount"] = pd.to_numeric(
-    comparison_df["Extracted_Net_Amount"], errors="coerce"
-)
-
-comparison_df["Amount_Match"] = (
-    comparison_df["GL_Amount"].round(2)
-    == comparison_df["Extracted_Net_Amount"].round(2)
-)
-        comparison_df["Overall_Result"] = comparison_df.apply(
-            lambda row: "No exception noted"
-            if row["Invoice_Number_Match"]
-            and row["Customer_Match"]
-            and row["Date_Match"]
-            and row["Amount_Match"]
-            else "Exception / review required",
-            axis=1,
-        )
+    return {
+        "Extracted_Invoice_No": invoice_no,
+        "Extracted_Customer": customer,
+        "Extracted_Date": invoice_date,
+        "Extracted_Net_Amount": net_amount,
+    }
 
         display_cols = [
             "Journal_ID",
