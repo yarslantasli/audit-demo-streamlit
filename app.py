@@ -66,32 +66,34 @@ def extract_invoice_fields(text):
     if invoice_match:
         invoice_no = invoice_match.group(1)
 
-    # Customer: Customer A, Customer B, etc.
+    # Customer: works for "Customer\nCustomer C" or "Customer: Customer C"
     customer_match = re.search(
-        r"Customer\s*:?\s*(Customer\s+[A-Z])",
+        r"Customer\s*:?\s*\n?\s*(Customer\s+[A-Z])",
         text,
         re.IGNORECASE,
     )
     if customer_match:
         customer = customer_match.group(1)
 
-    # Date: Invoice Date: 2025-12-21 or Date: 2025-12-21
+    # Invoice date: works for "Invoice Date\n2025-12-21" or "Invoice Date: 2025-12-21"
     date_match = re.search(
-        r"(Invoice Date|Date)\s*:?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
+        r"(Invoice Date|Date)\s*:?\s*\n?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
         text,
         re.IGNORECASE,
     )
     if date_match:
         invoice_date = date_match.group(2)
 
-    # Amount: Net Amount: £4,700 / Amount: £4,700 / Total: £4,700
-    amount_match = re.search(
-        r"(Net Amount|Amount|Total)\s*:?\s*£?\s*([0-9,]+(?:\.[0-9]{2})?)",
+    # Net amount: works for "Net Amount\nGBP 44,700.00" or "Net Amount: £44,700.00"
+    amount_matches = re.findall(
+        r"Net Amount\s*:?\s*\n?\s*(?:GBP|£)?\s*([0-9,]+(?:\.[0-9]{2})?)",
         text,
         re.IGNORECASE,
     )
-    if amount_match:
-        net_amount = float(amount_match.group(2).replace(",", ""))
+
+    if amount_matches:
+        # Use the last Net Amount occurrence, as PDFs may show it in line item and summary
+        net_amount = float(amount_matches[-1].replace(",", ""))
 
     return {
         "Extracted_Invoice_No": invoice_no,
