@@ -12,6 +12,7 @@ st.write(
     "Upload CY/PY GL, CY/PY TB and Mapping files to generate a basic audit workflow demo."
 )
 
+
 # -----------------------------
 # Helper functions
 # -----------------------------
@@ -44,6 +45,62 @@ def get_balance_column(df, year_type):
     return None
 
 
+def extract_pdf_text(pdf_file):
+    reader = PdfReader(pdf_file)
+    text = ""
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
+
+
+def extract_invoice_fields(text):
+    invoice_no = None
+    customer = None
+    invoice_date = None
+    net_amount = None
+
+    # Invoice number: INV-25-01279 or similar
+    invoice_match = re.search(r"(INV-\d{2}-\d{4,5})", text)
+    if invoice_match:
+        invoice_no = invoice_match.group(1)
+
+    # Customer: Customer A, Customer B, etc.
+    customer_match = re.search(
+        r"Customer\s*:?\s*(Customer\s+[A-Z])",
+        text,
+        re.IGNORECASE,
+    )
+    if customer_match:
+        customer = customer_match.group(1)
+
+    # Date: Invoice Date: 2025-12-21 or Date: 2025-12-21
+    date_match = re.search(
+        r"(Invoice Date|Date)\s*:?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if date_match:
+        invoice_date = date_match.group(2)
+
+    # Amount: Net Amount: £4,700 / Amount: £4,700 / Total: £4,700
+    amount_match = re.search(
+        r"(Net Amount|Amount|Total)\s*:?\s*£?\s*([0-9,]+(?:\.[0-9]{2})?)",
+        text,
+        re.IGNORECASE,
+    )
+    if amount_match:
+        net_amount = float(amount_match.group(2).replace(",", ""))
+
+    return {
+        "Extracted_Invoice_No": invoice_no,
+        "Extracted_Customer": customer,
+        "Extracted_Date": invoice_date,
+        "Extracted_Net_Amount": net_amount,
+    }
+
+
 # -----------------------------
 # 1. Upload Data
 # -----------------------------
@@ -54,15 +111,35 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Current Year")
-    uploaded_cy_gl = st.file_uploader("Upload Current Year GL", type=["csv", "xlsx"], key="cy_gl")
-    uploaded_cy_tb = st.file_uploader("Upload Current Year TB", type=["csv", "xlsx"], key="cy_tb")
+    uploaded_cy_gl = st.file_uploader(
+        "Upload Current Year GL",
+        type=["csv", "xlsx"],
+        key="cy_gl",
+    )
+    uploaded_cy_tb = st.file_uploader(
+        "Upload Current Year TB",
+        type=["csv", "xlsx"],
+        key="cy_tb",
+    )
 
 with col2:
     st.subheader("Prior Year")
-    uploaded_py_gl = st.file_uploader("Upload Prior Year GL", type=["csv", "xlsx"], key="py_gl")
-    uploaded_py_tb = st.file_uploader("Upload Prior Year TB", type=["csv", "xlsx"], key="py_tb")
+    uploaded_py_gl = st.file_uploader(
+        "Upload Prior Year GL",
+        type=["csv", "xlsx"],
+        key="py_gl",
+    )
+    uploaded_py_tb = st.file_uploader(
+        "Upload Prior Year TB",
+        type=["csv", "xlsx"],
+        key="py_tb",
+    )
 
-uploaded_mapping = st.file_uploader("Upload Mapping File", type=["csv", "xlsx"], key="mapping")
+uploaded_mapping = st.file_uploader(
+    "Upload Mapping File",
+    type=["csv", "xlsx"],
+    key="mapping",
+)
 
 cy_gl_df = read_file(uploaded_cy_gl)
 py_gl_df = read_file(uploaded_py_gl)
@@ -127,7 +204,7 @@ if st.button("Run Audit Workflow"):
 if st.session_state.workflow_run:
 
     # -----------------------------
-    # Financials / Movement
+    # 4. Financials / Movement
     # -----------------------------
 
     st.header("4. CY vs PY Financial Movement")
@@ -181,7 +258,7 @@ if st.session_state.workflow_run:
     )
 
     # -----------------------------
-    # Quarterly Revenue Trend
+    # 5. Quarterly Revenue Trend
     # -----------------------------
 
     st.header("5. Quarterly Revenue Trend")
@@ -192,8 +269,16 @@ if st.session_state.workflow_run:
     cy_gl["Date"] = pd.to_datetime(cy_gl["Date"])
     py_gl["Date"] = pd.to_datetime(py_gl["Date"])
 
-    cy_gl = cy_gl.merge(mapping_df[["Account_Code", "FS_Line", "Audit_Area"]], on="Account_Code", how="left")
-    py_gl = py_gl.merge(mapping_df[["Account_Code", "FS_Line", "Audit_Area"]], on="Account_Code", how="left")
+    cy_gl = cy_gl.merge(
+        mapping_df[["Account_Code", "FS_Line", "Audit_Area"]],
+        on="Account_Code",
+        how="left",
+    )
+    py_gl = py_gl.merge(
+        mapping_df[["Account_Code", "FS_Line", "Audit_Area"]],
+        on="Account_Code",
+        how="left",
+    )
 
     cy_revenue = cy_gl[cy_gl["Audit_Area"] == "Revenue"].copy()
     py_revenue = py_gl[py_gl["Audit_Area"] == "Revenue"].copy()
@@ -201,11 +286,21 @@ if st.session_state.workflow_run:
     cy_revenue["Quarter"] = "Q" + cy_revenue["Date"].dt.quarter.astype(str)
     py_revenue["Quarter"] = "Q" + py_revenue["Date"].dt.quarter.astype(str)
 
-    cy_quarter = cy_revenue.groupby("Quarter", as_index=False)["Credit"].sum().rename(columns={"Credit": "CY_Revenue"})
-    py_quarter = py_revenue.groupby("Quarter", as_index=False)["Credit"].sum().rename(columns={"Credit": "PY_Revenue"})
+    cy_quarter = (
+        cy_revenue.groupby("Quarter", as_index=False)["Credit"]
+        .sum()
+        .rename(columns={"Credit": "CY_Revenue"})
+    )
+
+    py_quarter = (
+        py_revenue.groupby("Quarter", as_index=False)["Credit"]
+        .sum()
+        .rename(columns={"Credit": "PY_Revenue"})
+    )
 
     quarter_trend = py_quarter.merge(cy_quarter, on="Quarter", how="outer").fillna(0)
     quarter_trend["Movement"] = quarter_trend["CY_Revenue"] - quarter_trend["PY_Revenue"]
+
     quarter_trend["Movement_%"] = quarter_trend.apply(
         lambda row: 0 if row["PY_Revenue"] == 0 else row["Movement"] / row["PY_Revenue"],
         axis=1,
@@ -224,7 +319,7 @@ if st.session_state.workflow_run:
     st.bar_chart(quarter_trend.set_index("Quarter")[["PY_Revenue", "CY_Revenue"]])
 
     # -----------------------------
-    # Analytical Review Draft
+    # 6. Analytical Review Draft
     # -----------------------------
 
     st.header("6. Analytical Review Draft")
@@ -255,7 +350,10 @@ if st.session_state.workflow_run:
         q4_cy = q4_row["CY_Revenue"].iloc[0]
         total_cy_rev = quarter_trend["CY_Revenue"].sum()
         q4_share = q4_cy / total_cy_rev if total_cy_rev != 0 else 0
-        q4_comment = f" Q4 revenue represents approximately {q4_share:.1%} of total CY revenue, indicating seasonality or a year-end concentration of revenue."
+        q4_comment = (
+            f" Q4 revenue represents approximately {q4_share:.1%} of total CY revenue, "
+            "indicating seasonality or a year-end concentration of revenue."
+        )
 
     analytical_review_text = f"""
 Revenue increased from {format_amount(revenue_py)} to {format_amount(revenue_cy)}, representing a movement of {format_amount(revenue_mov)} / {revenue_mov_pct:.1%}. 
@@ -268,7 +366,7 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     st.info(analytical_review_text)
 
     # -----------------------------
-    # Materiality - Basic Demo
+    # 7. Materiality
     # -----------------------------
 
     st.header("7. Materiality - Basic Demo")
@@ -279,8 +377,18 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     trivial_threshold = materiality_revenue_1pct * 0.05
 
     materiality_table = pd.DataFrame({
-        "Metric": ["Revenue", "Overall Materiality - 1% of Revenue", "Performance Materiality - 75%", "Trivial Threshold - 5%"],
-        "Amount": [total_revenue, materiality_revenue_1pct, performance_materiality, trivial_threshold],
+        "Metric": [
+            "Revenue",
+            "Overall Materiality - 1% of Revenue",
+            "Performance Materiality - 75%",
+            "Trivial Threshold - 5%",
+        ],
+        "Amount": [
+            total_revenue,
+            materiality_revenue_1pct,
+            performance_materiality,
+            trivial_threshold,
+        ],
     })
 
     st.dataframe(
@@ -294,7 +402,7 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     )
 
     # -----------------------------
-    # Risk Indicators
+    # 8. Risk Indicators
     # -----------------------------
 
     st.header("8. Risk Indicators")
@@ -340,14 +448,12 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         st.dataframe(risk_df, use_container_width=True)
 
     # -----------------------------
-    # Sample Selection
+    # 9. Revenue Sample Selection
     # -----------------------------
 
     st.header("9. Revenue Sample Selection")
 
     cy_revenue_samples = cy_revenue.copy()
-
-    # Only credit revenue lines
     cy_revenue_samples = cy_revenue_samples[cy_revenue_samples["Credit"] > 0]
 
     high_value_samples = cy_revenue_samples.sort_values("Credit", ascending=False).head(5).copy()
@@ -363,8 +469,15 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     ].sort_values("Credit", ascending=False).head(5).copy()
     year_end_samples["Selection_Reason"] = "Year-end revenue cut-off"
 
-    sample_df = pd.concat([high_value_samples, manual_samples, year_end_samples], ignore_index=True)
-    sample_df = sample_df.drop_duplicates(subset=["Journal_ID", "Account_Code", "Amount"], keep="first")
+    sample_df = pd.concat(
+        [high_value_samples, manual_samples, year_end_samples],
+        ignore_index=True,
+    )
+
+    sample_df = sample_df.drop_duplicates(
+        subset=["Journal_ID", "Account_Code", "Amount"],
+        keep="first",
+    )
 
     sample_columns = [
         "Journal_ID",
@@ -388,8 +501,9 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     )
 
     st.success("Demo workflow completed.")
-        # -----------------------------
-    # Supporting Document Upload & Comparison
+
+    # -----------------------------
+    # 10. Supporting Document Upload & Comparison
     # -----------------------------
 
     st.header("10. Supporting Document Upload & GL Comparison")
@@ -406,54 +520,70 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         key="supporting_docs",
     )
 
-    def extract_pdf_text(pdf_file):
-        reader = PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-        return text
-def extract_invoice_fields(text):
-    invoice_no = None
-    customer = None
-    invoice_date = None
-    net_amount = None
+    if uploaded_supporting_docs:
+        extraction_results = []
 
-    # Invoice number
-    invoice_match = re.search(r"(INV-\d{2}-\d{4,5})", text)
-    if invoice_match:
-        invoice_no = invoice_match.group(1)
+        for pdf_file in uploaded_supporting_docs:
+            pdf_text = extract_pdf_text(pdf_file)
+            extracted = extract_invoice_fields(pdf_text)
+            extracted["Uploaded_File"] = pdf_file.name
+            extraction_results.append(extracted)
 
-    # Customer - flexible pattern
-    customer_match = re.search(r"Customer\s*:?\s*(Customer\s+[A-Z])", text, re.IGNORECASE)
-    if customer_match:
-        customer = customer_match.group(1)
+        extracted_df = pd.DataFrame(extraction_results)
 
-    # Date - flexible pattern
-    date_match = re.search(
-        r"(Invoice Date|Date)\s*:?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
-        text,
-        re.IGNORECASE,
-    )
-    if date_match:
-        invoice_date = date_match.group(2)
+        st.subheader("Extracted Supporting Document Data")
+        st.dataframe(extracted_df, use_container_width=True)
 
-    # Net amount - flexible pattern
-    amount_match = re.search(
-        r"(Net Amount|Amount|Total)\s*:?\s*£?\s*([0-9,]+(?:\.[0-9]{2})?)",
-        text,
-        re.IGNORECASE,
-    )
-    if amount_match:
-        net_amount = float(amount_match.group(2).replace(",", ""))
+        comparison_df = sample_df.copy()
 
-    return {
-        "Extracted_Invoice_No": invoice_no,
-        "Extracted_Customer": customer,
-        "Extracted_Date": invoice_date,
-        "Extracted_Net_Amount": net_amount,
-    }
+        comparison_df["Invoice_No_Clean"] = comparison_df["Invoice_No"].astype(str).str.strip()
+        extracted_df["Extracted_Invoice_No_Clean"] = (
+            extracted_df["Extracted_Invoice_No"].astype(str).str.strip()
+        )
+
+        comparison_df = comparison_df.merge(
+            extracted_df,
+            left_on="Invoice_No_Clean",
+            right_on="Extracted_Invoice_No_Clean",
+            how="left",
+        )
+
+        comparison_df["GL_Date"] = pd.to_datetime(comparison_df["Date"]).dt.date.astype(str)
+        comparison_df["GL_Amount"] = pd.to_numeric(comparison_df["Credit"], errors="coerce")
+        comparison_df["Extracted_Net_Amount"] = pd.to_numeric(
+            comparison_df["Extracted_Net_Amount"],
+            errors="coerce",
+        )
+
+        comparison_df["Invoice_Number_Match"] = (
+            comparison_df["Invoice_No"].astype(str).str.strip()
+            == comparison_df["Extracted_Invoice_No"].astype(str).str.strip()
+        )
+
+        comparison_df["Customer_Match"] = (
+            comparison_df["Customer"].astype(str).str.strip()
+            == comparison_df["Extracted_Customer"].astype(str).str.strip()
+        )
+
+        comparison_df["Date_Match"] = (
+            comparison_df["GL_Date"].astype(str).str.strip()
+            == comparison_df["Extracted_Date"].astype(str).str.strip()
+        )
+
+        comparison_df["Amount_Match"] = (
+            comparison_df["GL_Amount"].round(2)
+            == comparison_df["Extracted_Net_Amount"].round(2)
+        )
+
+        comparison_df["Overall_Result"] = comparison_df.apply(
+            lambda row: "No exception noted"
+            if row["Invoice_Number_Match"]
+            and row["Customer_Match"]
+            and row["Date_Match"]
+            and row["Amount_Match"]
+            else "Exception / review required",
+            axis=1,
+        )
 
         display_cols = [
             "Journal_ID",
@@ -474,6 +604,7 @@ def extract_invoice_fields(text):
         ]
 
         st.subheader("GL vs Supporting Document Comparison")
+
         st.dataframe(
             comparison_df[display_cols].style.format({
                 "GL_Amount": "£{:,.0f}",
@@ -517,4 +648,3 @@ Auditor review is required to determine whether this represents a genuine except
 
     else:
         st.warning("No supporting invoice PDFs uploaded yet.")
-    st.success("Demo workflow completed.")
