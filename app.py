@@ -118,9 +118,13 @@ if not all_files_uploaded:
 
 st.success("All required files uploaded. Audit workflow is ready.")
 
-run_workflow = st.button("Run Audit Workflow")
+if "workflow_run" not in st.session_state:
+    st.session_state.workflow_run = False
 
-if run_workflow:
+if st.button("Run Audit Workflow"):
+    st.session_state.workflow_run = True
+
+if st.session_state.workflow_run:
 
     # -----------------------------
     # Financials / Movement
