@@ -517,6 +517,7 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         monthly_pivot["PY"] = 0
 
     monthly_pivot["Movement"] = monthly_pivot["CY"] - monthly_pivot["PY"]
+
     monthly_pivot["Movement_%"] = monthly_pivot.apply(
         lambda row: 0 if row["PY"] == 0 else row["Movement"] / abs(row["PY"]),
         axis=1,
@@ -540,6 +541,7 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
     )
 
     period_order = [f"P{str(i).zfill(2)}" for i in range(1, 13)]
+
     chart_data["Period"] = pd.Categorical(
         chart_data["Period"],
         categories=period_order,
@@ -556,13 +558,25 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         fill_value=0,
     )
 
+    for period in period_order:
+        if period not in chart_pivot.index:
+            chart_pivot.loc[period] = 0
+
+    chart_pivot = chart_pivot.sort_index()
+
+    if "CY" not in chart_pivot.columns:
+        chart_pivot["CY"] = 0
+
+    if "PY" not in chart_pivot.columns:
+        chart_pivot["PY"] = 0
+
     st.subheader(f"{selected_area} - Monthly Trend Chart")
-    st.line_chart(chart_pivot)
+    st.line_chart(chart_pivot[["CY", "PY"]])
 
     st.subheader(f"{selected_area} - Monthly Fluctuation Commentary")
 
-    total_cy_selected = chart_pivot["CY"].sum() if "CY" in chart_pivot.columns else 0
-    total_py_selected = chart_pivot["PY"].sum() if "PY" in chart_pivot.columns else 0
+    total_cy_selected = chart_pivot["CY"].sum()
+    total_py_selected = chart_pivot["PY"].sum()
     total_movement_selected = total_cy_selected - total_py_selected
 
     total_movement_pct_selected = (
@@ -573,14 +587,68 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
 
     max_cy_period = (
         chart_pivot["CY"].idxmax()
-        if "CY" in chart_pivot.columns and not chart_pivot["CY"].empty
+        if not chart_pivot["CY"].empty
         else "N/A"
     )
 
-    fluctuation_commentary = f"""
+    p10_cy = chart_pivot.loc["P10", "CY"] if "P10" in chart_pivot.index else 0
+    p11_cy = chart_pivot.loc["P11", "CY"] if "P11" in chart_pivot.index else 0
+    p12_cy = chart_pivot.loc["P12", "CY"] if "P12" in chart_pivot.index else 0
+
+    p01_to_p09_periods = ["P01", "P02", "P03", "P04", "P05", "P06", "P07", "P08", "P09"]
+    existing_p01_to_p09 = [p for p in p01_to_p09_periods if p in chart_pivot.index]
+
+    p01_to_p09_cy = chart_pivot.loc[existing_p01_to_p09, "CY"].sum() if existing_p01_to_p09 else 0
+    p10_to_p12_cy = p10_cy + p11_cy + p12_cy
+
+    average_p01_to_p09 = p01_to_p09_cy / 9 if p01_to_p09_cy != 0 else 0
+    average_p10_to_p12 = p10_to_p12_cy / 3 if p10_to_p12_cy != 0 else 0
+
+    last_quarter_increase_pct = (
+        0
+        if average_p01_to_p09 == 0
+        else (average_p10_to_p12 - average_p01_to_p09) / abs(average_p01_to_p09)
+    )
+
+    last_quarter_share = (
+        0
+        if total_cy_selected == 0
+        else p10_to_p12_cy / abs(total_cy_selected)
+    )
+
+    if selected_area == "Revenue":
+        fluctuation_commentary = f"""
 {selected_area} increased from {format_amount(total_py_selected)} to {format_amount(total_cy_selected)}, representing a movement of {format_amount(total_movement_selected)} / {total_movement_pct_selected:.1%}. 
-The highest CY monthly activity was identified in {max_cy_period}. 
-This monthly view helps the audit team identify seasonal trends, year-end spikes and unusual fluctuations requiring further investigation.
+The highest CY monthly activity was identified in {max_cy_period}.
+
+A significant increase is noted in the final quarter of the year. P10-P12 activity amounts to {format_amount(p10_to_p12_cy)}, representing approximately {last_quarter_share:.1%} of total CY revenue. 
+Average monthly revenue for P10-P12 is {format_amount(average_p10_to_p12)}, compared with an average of {format_amount(average_p01_to_p09)} for P1-P9, representing an increase of approximately {last_quarter_increase_pct:.1%}.
+
+This pattern may indicate year-end billing concentration, completion of contract milestones, seasonal sales activity, or accelerated revenue recognition close to year-end. From an audit perspective, this creates increased focus on revenue occurrence, cut-off and management override risk.
+
+Suggested audit response:
+- Select additional samples from P10, P11 and especially P12.
+- Perform year-end cut-off testing around the period-end date.
+- Review manual revenue journals posted in the final quarter.
+- Inspect post-year-end credit notes and cancellations.
+- Compare the increase in revenue with trade receivables and subsequent cash receipts.
+"""
+    else:
+        fluctuation_commentary = f"""
+{selected_area} increased from {format_amount(total_py_selected)} to {format_amount(total_cy_selected)}, representing a movement of {format_amount(total_movement_selected)} / {total_movement_pct_selected:.1%}. 
+The highest CY monthly activity was identified in {max_cy_period}.
+
+A significant final-quarter movement is noted. P10-P12 activity amounts to {format_amount(p10_to_p12_cy)}, representing approximately {last_quarter_share:.1%} of total CY activity. 
+Average monthly activity for P10-P12 is {format_amount(average_p10_to_p12)}, compared with an average of {format_amount(average_p01_to_p09)} for P1-P9, representing an increase of approximately {last_quarter_increase_pct:.1%}.
+
+This may indicate increased year-end billing, delayed cash collection, extended payment terms, or potential recoverability risk. From an audit perspective, this creates increased focus on valuation and recoverability of year-end receivables.
+
+Suggested audit response:
+- Review aged receivables at year-end.
+- Test post-year-end cash receipts.
+- Investigate large receivable balances arising in P10-P12.
+- Compare receivables growth against revenue growth.
+- Consider whether an expected credit loss or bad debt provision is required.
 """
 
     st.info(fluctuation_commentary)
