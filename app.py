@@ -61,12 +61,10 @@ def extract_invoice_fields(text):
     invoice_date = None
     net_amount = None
 
-    # Invoice number: INV-25-01279 or similar
     invoice_match = re.search(r"(INV-\d{2}-\d{4,5})", text)
     if invoice_match:
         invoice_no = invoice_match.group(1)
 
-    # Customer: works for "Customer\nCustomer C" or "Customer: Customer C"
     customer_match = re.search(
         r"Customer\s*:?\s*\n?\s*(Customer\s+[A-Z])",
         text,
@@ -75,7 +73,6 @@ def extract_invoice_fields(text):
     if customer_match:
         customer = customer_match.group(1)
 
-    # Invoice date: works for "Invoice Date\n2025-12-21" or "Invoice Date: 2025-12-21"
     date_match = re.search(
         r"(Invoice Date|Date)\s*:?\s*\n?\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
         text,
@@ -84,7 +81,6 @@ def extract_invoice_fields(text):
     if date_match:
         invoice_date = date_match.group(2)
 
-    # Net amount: works for "Net Amount\nGBP 44,700.00" or "Net Amount: £44,700.00"
     amount_matches = re.findall(
         r"Net Amount\s*:?\s*\n?\s*(?:GBP|£)?\s*([0-9,]+(?:\.[0-9]{2})?)",
         text,
@@ -92,7 +88,6 @@ def extract_invoice_fields(text):
     )
 
     if amount_matches:
-        # Use the last Net Amount occurrence, as PDFs may show it in line item and summary
         net_amount = float(amount_matches[-1].replace(",", ""))
 
     return {
@@ -276,6 +271,7 @@ if st.session_state.workflow_run:
         on="Account_Code",
         how="left",
     )
+
     py_gl = py_gl.merge(
         mapping_df[["Account_Code", "FS_Line", "Audit_Area"]],
         on="Account_Code",
@@ -450,10 +446,150 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         st.dataframe(risk_df, use_container_width=True)
 
     # -----------------------------
-    # 9. Revenue Sample Selection
+    # 9. Scoped-In Accounts Monthly Fluctuation
     # -----------------------------
 
-    st.header("9. Revenue Sample Selection")
+    st.header("9. Scoped-In Accounts Monthly Fluctuation")
+
+    st.write(
+        "This section visualises P1-P12 monthly fluctuations for scoped-in audit areas. "
+        "For this demo, Revenue and Trade Receivables are treated as scoped-in areas."
+    )
+
+    scoped_audit_areas = ["Revenue", "Trade Receivables"]
+
+    def prepare_monthly_gl(gl_df, year_label):
+        df = gl_df.copy()
+        df["Date"] = pd.to_datetime(df["Date"])
+        df["Period"] = "P" + df["Date"].dt.month.astype(str).str.zfill(2)
+        df["Year"] = year_label
+
+        df = df.merge(
+            mapping_df[["Account_Code", "FS_Line", "Statement", "Audit_Area"]],
+            on="Account_Code",
+            how="left",
+        )
+
+        df = df[df["Audit_Area"].isin(scoped_audit_areas)].copy()
+
+        df["Monthly_Value"] = df.apply(
+            lambda row: row["Credit"] - row["Debit"]
+            if row["Audit_Area"] == "Revenue"
+            else row["Debit"] - row["Credit"],
+            axis=1,
+        )
+
+        return df
+
+    cy_monthly_gl = prepare_monthly_gl(cy_gl_df, "CY")
+    py_monthly_gl = prepare_monthly_gl(py_gl_df, "PY")
+
+    monthly_gl = pd.concat([cy_monthly_gl, py_monthly_gl], ignore_index=True)
+
+    monthly_summary = (
+        monthly_gl.groupby(
+            ["Year", "Audit_Area", "FS_Line", "Account_Code", "Account_Name", "Period"],
+            as_index=False,
+        )["Monthly_Value"]
+        .sum()
+    )
+
+    selected_area = st.selectbox(
+        "Select scoped-in audit area",
+        scoped_audit_areas,
+        key="monthly_area_select",
+    )
+
+    selected_monthly = monthly_summary[monthly_summary["Audit_Area"] == selected_area].copy()
+
+    monthly_pivot = selected_monthly.pivot_table(
+        index=["FS_Line", "Account_Code", "Account_Name", "Period"],
+        columns="Year",
+        values="Monthly_Value",
+        aggfunc="sum",
+        fill_value=0,
+    ).reset_index()
+
+    if "CY" not in monthly_pivot.columns:
+        monthly_pivot["CY"] = 0
+
+    if "PY" not in monthly_pivot.columns:
+        monthly_pivot["PY"] = 0
+
+    monthly_pivot["Movement"] = monthly_pivot["CY"] - monthly_pivot["PY"]
+    monthly_pivot["Movement_%"] = monthly_pivot.apply(
+        lambda row: 0 if row["PY"] == 0 else row["Movement"] / abs(row["PY"]),
+        axis=1,
+    )
+
+    st.subheader(f"{selected_area} - P1 to P12 Monthly Movement Table")
+
+    st.dataframe(
+        monthly_pivot.style.format({
+            "CY": "£{:,.0f}",
+            "PY": "£{:,.0f}",
+            "Movement": "£{:,.0f}",
+            "Movement_%": "{:.1%}",
+        }),
+        use_container_width=True,
+    )
+
+    chart_data = (
+        selected_monthly.groupby(["Year", "Period"], as_index=False)["Monthly_Value"]
+        .sum()
+    )
+
+    period_order = [f"P{str(i).zfill(2)}" for i in range(1, 13)]
+    chart_data["Period"] = pd.Categorical(
+        chart_data["Period"],
+        categories=period_order,
+        ordered=True,
+    )
+
+    chart_data = chart_data.sort_values("Period")
+
+    chart_pivot = chart_data.pivot_table(
+        index="Period",
+        columns="Year",
+        values="Monthly_Value",
+        aggfunc="sum",
+        fill_value=0,
+    )
+
+    st.subheader(f"{selected_area} - Monthly Trend Chart")
+    st.line_chart(chart_pivot)
+
+    st.subheader(f"{selected_area} - Monthly Fluctuation Commentary")
+
+    total_cy_selected = chart_pivot["CY"].sum() if "CY" in chart_pivot.columns else 0
+    total_py_selected = chart_pivot["PY"].sum() if "PY" in chart_pivot.columns else 0
+    total_movement_selected = total_cy_selected - total_py_selected
+
+    total_movement_pct_selected = (
+        0
+        if total_py_selected == 0
+        else total_movement_selected / abs(total_py_selected)
+    )
+
+    max_cy_period = (
+        chart_pivot["CY"].idxmax()
+        if "CY" in chart_pivot.columns and not chart_pivot["CY"].empty
+        else "N/A"
+    )
+
+    fluctuation_commentary = f"""
+{selected_area} increased from {format_amount(total_py_selected)} to {format_amount(total_cy_selected)}, representing a movement of {format_amount(total_movement_selected)} / {total_movement_pct_selected:.1%}. 
+The highest CY monthly activity was identified in {max_cy_period}. 
+This monthly view helps the audit team identify seasonal trends, year-end spikes and unusual fluctuations requiring further investigation.
+"""
+
+    st.info(fluctuation_commentary)
+
+    # -----------------------------
+    # 10. Revenue Sample Selection
+    # -----------------------------
+
+    st.header("10. Revenue Sample Selection")
 
     cy_revenue_samples = cy_revenue.copy()
     cy_revenue_samples = cy_revenue_samples[cy_revenue_samples["Credit"] > 0]
@@ -502,13 +638,11 @@ Further audit procedures should consider revenue occurrence, cut-off and trade r
         use_container_width=True,
     )
 
-    st.success("Demo workflow completed.")
-
     # -----------------------------
-    # 10. Supporting Document Upload & Comparison
+    # 11. Supporting Document Upload & Comparison
     # -----------------------------
 
-    st.header("10. Supporting Document Upload & GL Comparison")
+    st.header("11. Supporting Document Upload & GL Comparison")
 
     st.write(
         "Upload fake invoice PDFs for the selected revenue samples. "
@@ -626,6 +760,8 @@ We inspected invoice {row['Extracted_Invoice_No']} for {row['Extracted_Customer'
 The invoice number, customer, date and amount agree to the selected GL revenue transaction. 
 No exception noted.
 """
+                st.success(note)
+
             else:
                 issues = []
 
@@ -645,8 +781,9 @@ We inspected the supporting document uploaded for selected revenue transaction {
 The system identified the following issue(s): {issue_text}. 
 Auditor review is required to determine whether this represents a genuine exception or requires further client follow-up.
 """
+                st.error(note)
 
-            st.info(note)
+        st.success("Demo workflow completed with supporting document comparison.")
 
     else:
         st.warning("No supporting invoice PDFs uploaded yet.")
